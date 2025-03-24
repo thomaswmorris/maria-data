@@ -73,7 +73,7 @@ regions['z']      = np.round(regions.altitude * g, 3)
 for region, entry in regions.iterrows():
     
     regions.loc[region, 'n_hourly'] = len(glob.glob(f'{era5_base}/levels/hourly/{region}/*.nc'))
-    # regions.loc[region, 'n_monthly'] = len(glob.glob(f'{era5_base}/monthly/levels/{region}/*.nc'))
+
    
 n_days_min = 0
 

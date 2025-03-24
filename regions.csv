@@ -1,7 +1,7 @@
 ,location,country,latitude,longitude,altitude,min_altitude,max_altitude,timezone,training_start,training_end,training_years
 boolardy,"Boolardy, Western Australia",Australia,-26.697,116.631,395,250,500,Australia/Perth,2010-01-01,2024-12-31,15.0
 boston,"Cambridge, Massachusetts",USA,42.374,-71.111,8,0,100,America/New_York,2015-01-01,2024-12-31,10.0
-chajnantor,"Llano de Chajnantor, Antofagasta",Chile,-23.006,-67.759,5040,4000,5750,America/Santiago,1957-02-20,2024-12-31,65.6
+chajnantor,"Llano de Chajnantor, Antofagasta",Chile,-23.006,-67.759,5000,4000,5750,America/Santiago,1957-02-20,2024-12-31,65.6
 chiang_mai,"Chiang Mai, Thailand",Thailand,18.864,99.217,395,0,2000,Asia/Bangkok,2022-01-01,2024-12-31,2.9
 effelsberg,"Effelsberg, North Rhine-Westphalia",Germany,50.524,6.883,319,0,500,Europe/Berlin,2015-01-01,2024-12-31,10.0
 green_bank,"Green Bank, West Virginia",USA,38.433,-79.84,807,500,1500,America/New_York,2000-01-01,2024-12-31,25.0
@@ -21,7 +21,7 @@ qitai,"Qitai, Xinjiang",China,43.601,89.699,1780,1500,2000,Asia/Urumqi,2015-01-0
 san_agustin,"Plains of San Agustín, New Mexico",USA,34.079,-107.618,2124,2000,2500,America/Denver,2010-01-01,2024-12-31,15.0
 san_basilio,"San Basilio, Sardinia",Italy,39.493,9.245,600,500,1000,Europe/Rome,2010-01-01,2024-12-31,15.0
 sierra_negra,"Sierra Negra, Puebla",Mexico,18.986,-97.314,4640,4000,5500,America/Mexico_City,2010-01-01,2024-12-31,15.0
-south_pole,South Pole,Antarctica,-90.0,0.0,2835,2750,3000,Antarctica/South_Pole,1993-11-12,2024-12-31,27.8
-summit_camp,"Summit Station, Greenland",Greenland,72.583,-38.455,3202,3100,3200,America/Nuuk,2002-03-18,2024-12-31,20.1
+south_pole,South Pole,Antarctica,-90.0,0.0,2835,2000,5000,Antarctica/South_Pole,1993-11-12,2024-12-31,27.8
+summit_camp,"Summit Station, Greenland",Greenland,72.583,-38.455,3202,2000,3500,America/Nuuk,2002-03-18,2024-12-31,20.1
 teide,"Mount Teide, Tenerife",Spain,28.301,-16.511,2390,2000,3750,Atlantic/Canary,2010-01-01,2024-12-31,15.0
 thule,Thule Air Base,Greenland,76.535,-68.686,77,0,500,America/Thule,2020-08-14,2024-12-31,2.4
