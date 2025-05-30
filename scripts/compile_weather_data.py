@@ -30,10 +30,20 @@ def file_age_in_seconds(filepath):
     return time.time() - os.stat(filepath)[stat.ST_MTIME]
 
 def get_utc_day_hour(t):
+    logger.warning("This method is deprecated and will be removed in the future; use utc_day_hour instead")
     dt = datetime.fromtimestamp(t, tz=pytz.utc).replace(tzinfo=pytz.utc)
     return dt.hour + dt.minute / 60 + dt.second / 3600
 
 def get_utc_year_day(t):
+    logger.warning("This method is deprecated and will be removed in the future; use utc_day_hour instead")
+    tt = datetime.fromtimestamp(t, tz=pytz.utc).replace(tzinfo=pytz.utc).timetuple()
+    return (tt.tm_yday + get_utc_day_hour(t) / 24 - 1) 
+
+def utc_day_hour(t):
+    dt = datetime.fromtimestamp(t, tz=pytz.utc).replace(tzinfo=pytz.utc)
+    return dt.hour + dt.minute / 60 + dt.second / 3600
+
+def utc_year_day(t):
     tt = datetime.fromtimestamp(t, tz=pytz.utc).replace(tzinfo=pytz.utc).timetuple()
     return (tt.tm_yday + get_utc_day_hour(t) / 24 - 1) 
 
