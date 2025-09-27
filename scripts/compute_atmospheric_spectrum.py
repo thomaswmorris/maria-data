@@ -26,13 +26,39 @@ args = parser.parse_args()
 region = args.region
 tag = args.tag
 
-spec_ranges = [(1e6, 1e7, 1e-1),
-               (1e7, 1e8, 1e-1),
-               (1e8, 1e9, 1e-1),
-               (1e9, 1e10, 1e-2),
-               (1e10, 1e11, 1e-2),
-               (1e11, 1e12, 1e-3),
-               (1e12, 15e12, 1e-2)]
+
+spec_ranges = [(1e6, 1e7, 1e-1), # 1 MHz to 10 MHz
+               (1e7, 1e8, 1e-1), # 10 MHz to 100 MHz
+               (1e8, 1e9, 1e-1), # 100 MHz to 1 GHz
+               (1e9, 1e10, 1e-2), # 1 GHz to 10 GHz
+               (1e10, 1e11, 1e-2), # 10 GHz to 100 GHz
+               (1e11, 1e12, 1e-3), # 100 GHz to 1 THz
+               (1e12, 15e12, 1e-2)] # 1 THz to 15 THz
+
+# spec_ranges = [
+#     (1e6, 2e6, 1e-1),
+#     (2e6, 5e6, 1e-1),
+#     (5e6, 1e7, 1e-1),
+#     (1e7, 2e7, 1e-1),
+#     (2e7, 5e7, 1e-1),
+#     (5e7, 1e8, 1e-1),
+#     (1e8, 2e8, 1e-1),
+#     (2e8, 5e8, 1e-1),
+#     (5e8, 1e9, 1e-1),
+#     (1e9, 2e9, 1e-2),
+#     (2e9, 5e9, 1e-2),
+#     (5e9, 1e10, 1e-2),
+#     (1e10, 2e10, 1e-3),
+#     (2e10, 5e10, 1e-3),
+#     (5e10, 1e11, 1e-3),
+#     (1e11, 2e11, 1e-3),
+#     (2e11, 5e11, 1e-3),
+#     (5e11, 1e12, 1e-2),
+#     (1e12, 2e12, 1e-1),
+#     (2e12, 5e12, 1e-1),
+#     (5e12, 1e13, 1e-1),
+#     (1e13, 1.5e13, 1e-1),
+# ]
 
 decades = []
 nu = np.empty(0)
@@ -52,13 +78,13 @@ for i, (f_min, f_max, rel_step) in enumerate(spec_ranges):
     nu = np.r_[nu, decade_nu]
 
 # for running on della
-MARIA_DATA_PATH = "/users/tom/maria/data"
+MARIA_PATH = "/users/tom/maria"
 AM_PATH = "/users/tom/am-14.0/src/am"
 
 REGIONS = pd.read_csv("/users/tom/maria/data/regions.csv", index_col=0)
 region_entry = REGIONS.loc[region]
 
-write_dir = f"{MARIA_DATA_PATH}/atmosphere/spectra/am/{tag}"
+write_dir = f"{MARIA_PATH}/raw_spectra/{tag}"
 assert os.path.isdir(write_dir)
 write_path = f"{write_dir}/{region}.h5"
 
@@ -66,6 +92,9 @@ if os.path.exists(write_path):
     if time.time() - os.stat(write_path)[stat.ST_MTIME] < 7 * 86400: # one week:
         print(f"skipping {write_path}")
         quit()
+
+with h5py.File(write_path, "w") as f:
+    ...
 
 h_master = np.arange(0, 45000 + 1, 250)
 
@@ -78,7 +107,7 @@ profiles["absolute_humidity"] = {}
 quantiles = {}
 spectra_data = {}
 
-with h5py.File(f"{MARIA_DATA_PATH}/atmosphere/weather/era5/{region}.h5", "r") as f:
+with h5py.File(f"{MARIA_PATH}/data/atmosphere/weather/era5/{region}.h5", "r") as f:
     fields = list(f["data"].keys())
 
     pressure_profile = 1e2 * f["pressure_levels"][:] # in Pa
@@ -127,7 +156,7 @@ else:
     altitude_samples = [region_entry.min_altitude, region_entry.altitude, region_entry.max_altitude]
     
 zenith_pwv_samples = [0, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0]
-base_temperature_samples = np.percentile(quantiles["temperature"][..., 0], q=[0, 50, 100])
+base_temperature_samples = np.percentile(quantiles["temperature"][..., 0], q=[0, 100])
 elevation_samples = np.linspace(10, 90, 9)
 
 # pwv_scales = zenith_pwv_samples / typical_pwv
@@ -147,6 +176,10 @@ L = np.zeros(TRJ.shape)
 
 total_spectra = np.prod(TRJ.shape[:-1]) * len(decades)
 i_spectrum = 0
+
+
+region_start = time.monotonic()
+
 for i_alt, alt in enumerate(altitude_samples):
 
     layer_boundaries = [alt]
@@ -231,15 +264,21 @@ for i_alt, alt in enumerate(altitude_samples):
 
                     i_spectrum += 1
 
+                    mtpl = (time.monotonic() - region_start) / i_spectrum
+
+                    expected_finish_time = region_start + total_spectra * mtpl
+
                     logger_data = {"region": region,
                                    "alt": f"{alt} m",
                                    "base_temp": f"{bt:.1f} K",
                                    "pwv": f"{pwv:.02f} mm",
                                    "elev": f"{el} deg",
                                    "nu": f"{decade['f_min']:.01e}Hz-{decade['f_max']:.01e}Hz",
-                                   "duration": f"{time.monotonic() - start_time:.02f}"}
+                                   "duration": f"{time.monotonic() - start_time:.02f}",
+                                   "etr": f"{expected_finish_time - time.monotonic():.1f} s"}
                     
                     logger.info(" | ".join([f"{k}={v}" for k, v in logger_data.items()]) + f" | {i_spectrum} / {total_spectra}")
+
 
 
 spectra_data["side_nu_Hz"] = np.array(nu)
@@ -265,20 +304,9 @@ with h5py.File(write_path, "w") as f:
     }
 
     for key in output_config.keys():
-
-        f.create_group(key)
-
-        offset = spectra_data[key].mean(axis=-1)[..., None]
-        scale = spectra_data[key].std(axis=-1)[..., None]
-        scale = np.where(scale > 0, scale, 1e0)
-        relative = (spectra_data[key] - offset) / scale
-
-        f[key].create_dataset("offset", data=offset)
-        f[key].create_dataset("scale", data=scale)
-        f[key].create_dataset("relative", data=relative, 
-                                 dtype="f", 
-                                 compression="gzip", 
-                                 compression_opts=9, 
-                                 **output_config[key]["kwargs"],
-                            )
-
+        f.create_dataset(key, 
+                         data=spectra_data[key],
+                         dtype="f", 
+                         compression="gzip", 
+                         compression_opts=9)
+    
