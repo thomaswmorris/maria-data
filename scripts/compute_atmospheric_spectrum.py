@@ -10,6 +10,7 @@ import numpy as np
 import scipy as sp
 import pandas as pd
 from maria.weather import relative_to_absolute_humidity
+from maria.constants import g
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,7 +26,6 @@ args = parser.parse_args()
 
 region = args.region
 tag = args.tag
-
 
 spec_ranges = [(1e6, 1e7, 1e-1), # 1 MHz to 10 MHz
                (1e7, 1e8, 1e-1), # 10 MHz to 100 MHz
@@ -107,8 +107,18 @@ profiles["absolute_humidity"] = {}
 quantiles = {}
 spectra_data = {}
 
+
+data = {}
+compiled_file = f"{copernicus_base}/era5/compiled/{region}.h5"
+
+with h5py.File(compiled_file, "r") as f:
+    for group in f.keys():
+        data[group] = {}
+        for key in f[group].keys():
+            data[group][key] = f[group][key][:]
+
 with h5py.File(f"{MARIA_PATH}/data/atmosphere/weather/era5/{region}.h5", "r") as f:
-    fields = list(f["data"].keys())
+    fields = list(f["levels"].keys())
 
     pressure_profile = 1e2 * f["pressure_levels"][:] # in Pa
     quantile_levels = f["quantile_levels"][:]
@@ -121,13 +131,13 @@ with h5py.File(f"/users/tom/era5/consolidated/{region}.h5", "r") as f:
 
     d = {}
     
-    h_data = f["data"]["geopotential"][:].mean(axis=0) / 9.8
+    h_data = f["data"]["geopotential"][:].mean(axis=0) / g
     d["temperature"] = f["data"]["temperature"][:].mean(axis=0)
     d["ozone"] = f["data"]["ozone"][:].mean(axis=0)
-    d["pressure"] = np.log(1e2 * f["pressure_levels"][:])
     
     relative_humidity = f["data"]["humidity"][:].mean(axis=0)
     d["absolute_humidity"] = np.log(relative_to_absolute_humidity(d["temperature"], relative_humidity))
+    d["pressure"] = np.log(1e2 * f["pressure_levels"][:])
 
 mask = h_data < 1e4 #h_data.min() + 5e3
 
@@ -153,7 +163,7 @@ for key in ["pressure", "absolute_humidity"]:
 if region_entry.max_altitude - region_entry.min_altitude <= 1e3:
     altitude_samples = [region_entry.min_altitude, region_entry.max_altitude]
 else:
-    altitude_samples = [region_entry.min_altitude, region_entry.altitude, region_entry.max_altitude]
+    altitude_samples = [region_entry.min_altitude, region_entry.altitude, region_entry.max_altitude, ]
     
 zenith_pwv_samples = [0, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0]
 base_temperature_samples = np.percentile(quantiles["temperature"][..., 0], q=[0, 100])

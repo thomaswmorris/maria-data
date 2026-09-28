@@ -64,25 +64,25 @@ def grouper(iterable, tol=1):
 
 g = 9.80665
 
-era5_base  = f'/users/tom/copernicus/era5'
+copernicus_base = "/users/tom/copernicus"
+maria_base = "/users/tom/maria"
 
-
-all_files = glob.glob(f'{era5_base}/levels/hourly/*/*.nc')
+all_files = glob.glob(f'{copernicus_base}/era5/levels/hourly/*/*.nc')
 for filepath in all_files:
     size = os.stat(filepath).st_size
     if size < 10e3: # greater than 10 kB
         print(f"File too small ({1e-3*size:.2f} KB): {filepath}")
-    if (size > 100e3) and (size < 200e3): # greater than 10 kB
-        print(f"Weird file ({1e-3*size:.2f} KB): {filepath}")
+    # if (size > 100e3) and (size < 300e3): # greater than 10 kB
+    #     print(f"Weird file ({1e-3*size:.2f} KB): {filepath}")
     
 regions = pd.read_csv(f'/users/tom/copernicus/regions.csv', index_col=0)#.fillna('')
 regions = regions.loc[regions.include_in_maria]
 
 use_region = np.zeros(len(regions)).astype(bool)
-regions['z']      = np.round(regions.altitude * g, 3)
+regions['z'] = np.round(regions.altitude * g, 3)
 for region, entry in regions.iterrows():
     
-    regions.loc[region, 'n_hourly'] = len(glob.glob(f'{era5_base}/levels/hourly/{region}/*.nc'))
+    regions.loc[region, 'n_hourly'] = len(glob.glob(f'{copernicus_base}/era5/levels/hourly/{region}/*.nc'))
 
    
 n_days_min = 0
@@ -121,8 +121,8 @@ dh_bins = np.linspace(0, 24, 25)
 n_yd = len(yd_bins) - 1
 n_dh = len(dh_bins) - 1
 
-year_day_edge_index = np.r_[-1,np.arange(n_yd),n_yd]
-day_hour_edge_index = np.r_[-1,np.arange(n_dh),n_dh]
+year_day_edge_index = np.r_[-1, np.arange(n_yd), n_yd]
+day_hour_edge_index = np.r_[-1, np.arange(n_dh), n_dh]
 
 year_day_side = sp.interpolate.interp1d(np.arange(n_yd), .5*(yd_bins[1:] + yd_bins[:-1]), fill_value='extrapolate', kind='linear')(year_day_edge_index)
 day_hour_side = sp.interpolate.interp1d(np.arange(n_dh), .5*(dh_bins[1:] + dh_bins[:-1]), fill_value='extrapolate', kind='linear')(day_hour_edge_index)
@@ -140,19 +140,10 @@ for region, entry in regions.loc[regions.use].iterrows():
     print()
 
     region_file = f"/users/tom/copernicus/era5/levels/consolidated/{region}.h5"
-
-    # if os.path.exists(region_file):
-    #     if file_age_in_seconds(region_file) < 1e3:
-    #         continue
-
-    # if region not in ["thule"]: 
-    #     continue
-    
     
     data[region] = {}
-    prefix = f'/users/tom'
 
-    region_path = pathlib.Path(f"{era5_base}/levels/hourly/{region}")
+    region_path = pathlib.Path(f"{copernicus_base}/era5/levels/hourly/{region}")
     profile_filepaths = sorted(list(region_path.glob("*.nc")))
     profile_dates = [re.findall(r'/(.{10})\.nc', str(p_fp))[0] for p_fp in profile_filepaths]
     
@@ -175,45 +166,99 @@ for region, entry in regions.loc[regions.use].iterrows():
     pbar = tqdm(range(len(sorted_dates)), desc=f"{region}")
     
     # pbar = enumerate(sorted(profile_dates))
+
     
-    current_year = 0
-    for idate in pbar:
-
-        date = sorted_dates[idate]
-        pbar.set_postfix(date=date)
-
-        # year = datetime.fromisoformat(date).year
-        # if year != current_year:
-        #     pbar.set_description(f"{region} ({year})")
-        #     current_year = year
-
-        i0 = 24 * idate
-        i1 = 24 * (idate + 1)
+    import pytz
+    
+    from datetime import datetime
+    
+    offset_1900 = datetime(1900,1,1,0,0,0, tzinfo=pytz.utc).timestamp()
+    
+    data = {}
+    time_lists = {}
+    data_lists = {}
+    levels = {}
+    
+    for region, region_data in regions.iterrows():
+    
+        time_lists[region] = []
+        data_lists[region] = {}
+    
+        region_dir = pathlib.Path(f"{copernicus_base}/era5/levels/hourly/{region}")
+        region_nc_paths = sorted(list(region_dir.glob("*.nc")))
+    
+        for nc_path in tqdm(region_nc_paths):
         
-        timestamp = datetime.fromisoformat(date + 'T00:00:00').timestamp()     
-        try:
-            date_path = f"{era5_base}/levels/hourly/{region}/{date}.nc"
-            profile_dataset = nc.Dataset(date_path)
-        except:
-            warnings.warn(f"Could not read file {date_path}.")
-        for k, v in profile_translation.items():
-            data[region][v][i0:i1] = profile_dataset[k][:,:,0,0].astype(dtype)
-
-        if "valid_time" in profile_dataset.variables:
-            data[region]['time'][i0:i1] = profile_dataset["valid_time"][:].data.astype(dtype) - 1800
-        else:
-            data[region]['time'][i0:i1] = 3600 * profile_dataset["time"][:].data.astype(dtype) + datetime(1900,1,1,0,0,0, tzinfo=pytz.utc).timestamp() - 1800
+            with nc.Dataset(nc_path) as ds:
+    
+                if "valid_time" in ds.variables:
+                    t = ds["valid_time"][:].data.astype(float) - 1800
+                else:
+                    t = 3600 * ds["time"][:].data.astype(float) - 1800 + offset_1900
+    
+                time_lists[region].append(t)
+                
         
-    data[region]['pressure_levels'] = (profile_dataset['level'] if "level" in profile_dataset.variables else profile_dataset.variables['pressure_level'])[:].data.astype(dtype)
-
-
-    data[region]['lat'], data[region]['lon'] = profile_dataset['latitude'][:].mean(), profile_dataset['longitude'][:].mean()
-
-    data[region]["day_hour"] = np.array(list(map(get_utc_day_hour, data[region]["time"])))
-    data[region]["year_day"] = np.array(list(map(get_utc_year_day, data[region]["time"])))
+                # if "valid_time" in ds.variables:
+                #     time_lists[region].append(ds.variables["valid_time"][:].data)
+                # else:
+                #     time_lists[region].append(arrow.get("1900-01-01").timestamp() + 3600 * ds.variables["time"][:].data)
+                
+                for variable, long_name in translation.items():
+                    if long_name not in data_lists[region]:
+                        data_lists[region][long_name] = []
+                    array = ds[variable][:].data
+                    if np.isnan(array).any():
+                        print(f"nans in variable '{variable}' for file {nc_path}")
+                    data_lists[region][long_name].append(array)
+            
+                if "isobaricInhPa" in ds.variables:
+                    levels[region] = ds.variables["isobaricInhPa"][:].data
+                elif "pressure_level" in ds.variables:
+                    levels[region] = ds.variables["pressure_level"][:].data
+                else:
+                    levels[region] = ds.variables["level"][:].data.astype(float)
+                                
     
-    ######## COMPUTE SOME STUFF ########
+        
+        current_year = 0
+        for idate in pbar:
     
+            date = sorted_dates[idate]
+            pbar.set_postfix(date=date)
+    
+            # year = datetime.fromisoformat(date).year
+            # if year != current_year:
+            #     pbar.set_description(f"{region} ({year})")
+            #     current_year = year
+    
+            i0 = 24 * idate
+            i1 = 24 * (idate + 1)
+            
+            timestamp = datetime.fromisoformat(date + 'T00:00:00').timestamp()     
+            try:
+                date_path = f"{copernicus_base}/era5/levels/hourly/{region}/{date}.nc"
+                profile_dataset = nc.Dataset(date_path)
+            except:
+                warnings.warn(f"Could not read file {date_path}.")
+            for k, v in profile_translation.items():
+                data[region][v][i0:i1] = profile_dataset[k][:,:,0,0].astype(dtype)
+    
+            if "valid_time" in profile_dataset.variables:
+                data[region]['time'][i0:i1] = profile_dataset["valid_time"][:].data.astype(dtype) - 1800
+            else:
+                data[region]['time'][i0:i1] = 3600 * profile_dataset["time"][:].data.astype(dtype) + datetime(1900,1,1,0,0,0, tzinfo=pytz.utc).timestamp() - 1800
+            
+        data[region]['pressure_levels'] = (profile_dataset['level'] if "level" in profile_dataset.variables else profile_dataset.variables['pressure_level'])[:].data.astype(dtype)
+    
+    
+        data[region]['lat'], data[region]['lon'] = profile_dataset['latitude'][:].mean(), profile_dataset['longitude'][:].mean()
+    
+        data[region]["day_hour"] = np.array(list(map(get_utc_day_hour, data[region]["time"])))
+        data[region]["year_day"] = np.array(list(map(get_utc_year_day, data[region]["time"])))
+        
+        ######## COMPUTE SOME STUFF ########
+        
     
 
     level_mask = np.arange(37) >= np.where(np.percentile(data[region]['geopotential'], q=99, axis=0) > entry.z)[0][0] - 1
@@ -298,7 +343,7 @@ for region, entry in regions.loc[regions.use].iterrows():
         print(f"WARNING: h_min = {int(h_min)} m, min_altitude = {int(entry.min_altitude)} m")
 
 
-    with h5py.File(f"/users/tom/maria/data/atmosphere/weather/era5/{region}.h5", "w") as f:
+    with h5py.File(f"{maria_base}/data/atmosphere/weather/era5/{region}.h5", "w") as f:
 
         f.create_dataset("quantile_levels", data=quantiles, dtype=float)
         f.create_dataset("pressure_levels", data=data[region]["pressure_levels"], dtype=float)
@@ -328,7 +373,7 @@ for region, entry in regions.loc[regions.use].iterrows():
             f["data"][v].create_dataset("normalized_quantiles", data=normalized_quantiles, dtype="f", scaleoffset=4)
 
 
-    # with h5py.File(f"/users/tom/maria/data/atmosphere/weather/era5/v2/{region}.h5", "w") as f:
+    # with h5py.File(f"{maria_base}/data/atmosphere/weather/era5/v2/{region}.h5", "w") as f:
 
     #     f.create_dataset("quantile_levels", data=quantiles, dtype=float)
     #     f.create_dataset("pressure_levels", data=data[region]["pressure_levels"], dtype=float)
@@ -379,7 +424,6 @@ column_mapping = {
                 }
 
 maria_regions = regions.loc[regions.use].loc[:, list(column_mapping.keys())]
-
 maria_regions.columns = list(column_mapping.values())
 
 for col in ["latitude", "longitude", "altitude"]:
@@ -393,10 +437,8 @@ for region in data.keys():
     
     maria_regions.loc[region, 'training_start'] = date_min
     maria_regions.loc[region, 'training_end'] = date_max
-    maria_regions.loc[region, 'training_years'] = np.round(len(data[region]["time"]) / (24 * 365.2422),1)
+    maria_regions.loc[region, 'training_years'] = np.round(len(data[region]["time"]) / (24 * 365.2422), 1)
     
 maria_regions = maria_regions.loc[~maria_regions.training_years.isna()]
-maria_regions.to_csv(f"/users/tom/maria/src/maria/site/regions.csv")
-maria_regions.to_csv(f"/users/tom/maria/data/regions.csv")
-
-maria_regions
+maria_regions.to_csv(f"{maria_base}/src/maria/site/regions.csv")
+maria_regions.to_csv(f"{maria_base}/data/regions.csv")
