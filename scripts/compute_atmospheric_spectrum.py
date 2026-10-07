@@ -3,14 +3,12 @@ import h5py
 import os
 import pathlib
 import logging
-import subprocess
-import re, os, stat
 import argparse
 import numpy as np
-import scipy as sp
-import pandas as pd
-from maria.weather import relative_to_absolute_humidity
-from maria.constants import g
+
+import maria
+from maria import Quantity, Weather
+from maria.site import REGIONS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,303 +18,150 @@ logging.basicConfig(
 logger = logging.getLogger("am")
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--region", type=str, help="maria region")
 parser.add_argument("--tag", type=str)
 args = parser.parse_args()
 
-region = args.region
 tag = args.tag
 
-spec_ranges = [(1e6, 1e7, 1e-1), # 1 MHz to 10 MHz
-               (1e7, 1e8, 1e-1), # 10 MHz to 100 MHz
-               (1e8, 1e9, 1e-1), # 100 MHz to 1 GHz
-               (1e9, 1e10, 1e-2), # 1 GHz to 10 GHz
-               (1e10, 1e11, 1e-2), # 10 GHz to 100 GHz
-               (1e11, 1e12, 1e-3), # 100 GHz to 1 THz
-               (1e12, 15e12, 1e-2)] # 1 THz to 15 THz
+maria.set_local_cache_dir("/home/tm12/maria/data")
 
-# spec_ranges = [
-#     (1e6, 2e6, 1e-1),
-#     (2e6, 5e6, 1e-1),
-#     (5e6, 1e7, 1e-1),
-#     (1e7, 2e7, 1e-1),
-#     (2e7, 5e7, 1e-1),
-#     (5e7, 1e8, 1e-1),
-#     (1e8, 2e8, 1e-1),
-#     (2e8, 5e8, 1e-1),
-#     (5e8, 1e9, 1e-1),
-#     (1e9, 2e9, 1e-2),
-#     (2e9, 5e9, 1e-2),
-#     (5e9, 1e10, 1e-2),
-#     (1e10, 2e10, 1e-3),
-#     (2e10, 5e10, 1e-3),
-#     (5e10, 1e11, 1e-3),
-#     (1e11, 2e11, 1e-3),
-#     (2e11, 5e11, 1e-3),
-#     (5e11, 1e12, 1e-2),
-#     (1e12, 2e12, 1e-1),
-#     (2e12, 5e12, 1e-1),
-#     (5e12, 1e13, 1e-1),
-#     (1e13, 1.5e13, 1e-1),
-# ]
+### GENERATE THE SIDE VALUES ###
 
-decades = []
-nu = np.empty(0)
-cum_n = 0
-for i, (f_min, f_max, rel_step) in enumerate(spec_ranges):
+write_dir = f"/scratch/gpfs/SIMONSOBS/users/tm12/maria-data/atmosphere/spectra/am/{tag}"
 
-    f_step = rel_step * f_min
-    f_max = f_max if i + 1 == len(spec_ranges) else f_max - f_step
+os.makedirs(write_dir, exist_ok=True)
+
+for region, region_data in REGIONS.iterrows():
+
+    region_write_path = f"{write_dir}/{region}.h5"
+
+    if os.path.exists(region_write_path):
+        continue
+
+    with h5py.File(region_write_path, "w") as f:
+        ...
     
-    decade_nu = np.arange(f_min, f_max + 1e0, step=f_step)
-    decades.append({"f_min": int(f_min), 
-                    "f_max": int(f_max), 
-                    "f_step": int(f_step), 
-                    "n": len(decade_nu),
-                    "start_index": cum_n})
-    cum_n += len(decade_nu)
-    nu = np.r_[nu, decade_nu]
+    w_zmin = Weather(region, altitude=region_data.min_altitude, diurnal=False, seasonal=False)
+    upper_pressure_level = w_zmin.pressure[np.digitize(w_zmin.pressure_level.Pa, w_zmin.pressure.Pa)].hPa
 
-# for running on della
-MARIA_PATH = "/users/tom/maria"
-AM_PATH = "/users/tom/am-14.0/src/am"
+    w_zmax = Weather(region, altitude=region_data.max_altitude, diurnal=False, seasonal=False)
+    lower_pressure_level = w_zmax.pressure[np.digitize(w_zmax.pressure_level.Pa, w_zmax.pressure.Pa)].hPa
+    lower_pressure_level = min(lower_pressure_level, upper_pressure_level - 100)
 
-REGIONS = pd.read_csv("/users/tom/maria/data/regions.csv", index_col=0)
-region_entry = REGIONS.loc[region]
-
-write_dir = f"{MARIA_PATH}/raw_spectra/{tag}"
-assert os.path.isdir(write_dir)
-write_path = f"{write_dir}/{region}.h5"
-
-if os.path.exists(write_path):
-    if time.time() - os.stat(write_path)[stat.ST_MTIME] < 7 * 86400: # one week:
-        print(f"skipping {write_path}")
-        quit()
-
-with h5py.File(write_path, "w") as f:
-    ...
-
-h_master = np.arange(0, 45000 + 1, 250)
-
-profiles = {}
-profiles["temperature"] = {}
-profiles["pressure"] = {}
-profiles["ozone"] = {}
-profiles["absolute_humidity"] = {}
-
-quantiles = {}
-spectra_data = {}
-
-
-data = {}
-compiled_file = f"{copernicus_base}/era5/compiled/{region}.h5"
-
-with h5py.File(compiled_file, "r") as f:
-    for group in f.keys():
-        data[group] = {}
-        for key in f[group].keys():
-            data[group][key] = f[group][key][:]
-
-with h5py.File(f"{MARIA_PATH}/data/atmosphere/weather/era5/{region}.h5", "r") as f:
-    fields = list(f["levels"].keys())
-
-    pressure_profile = 1e2 * f["pressure_levels"][:] # in Pa
-    quantile_levels = f["quantile_levels"][:]
-
-    for attr in fields:
-        quantiles[attr] = f["data"][attr]["normalized_quantiles"][:] * f["data"][attr]["scale"][:] + f["data"][attr]["mean"][:]
-
-
-with h5py.File(f"/users/tom/era5/consolidated/{region}.h5", "r") as f:
-
-    d = {}
+    side_pressure_level = Quantity([10, lower_pressure_level, upper_pressure_level], "hPa").pin("hPa")
     
-    h_data = f["data"]["geopotential"][:].mean(axis=0) / g
-    d["temperature"] = f["data"]["temperature"][:].mean(axis=0)
-    d["ozone"] = f["data"]["ozone"][:].mean(axis=0)
+    effective_temperatures = []
+    for pressure_level in side_pressure_level:
+        for quantile in [0.05, 0.95]:
+            w = Weather(region, pressure_level=pressure_level, quantiles={"temperature": quantile}, diurnal=False, seasonal=False)
+            effective_temperatures.append(w.effective_temperature)
+    side_effective_temperature = Quantity([min(effective_temperatures), np.mean(effective_temperatures), max(effective_temperatures)], "K")
     
-    relative_humidity = f["data"]["humidity"][:].mean(axis=0)
-    d["absolute_humidity"] = np.log(relative_to_absolute_humidity(d["temperature"], relative_humidity))
-    d["pressure"] = np.log(1e2 * f["pressure_levels"][:])
-
-mask = h_data < 1e4 #h_data.min() + 5e3
-
-for k, data in d.items():
-
-    linear = lambda x, a, b: a * x + b
-    pars, cpars = sp.optimize.curve_fit(linear, h_data[mask], data[mask])
+    side_pwv = Quantity([0, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0], "mm").pin("mm")
     
-    h_interp = [0, *h_data]
-    d_interp = [linear(0, *pars), *data]
+    el_samples = np.array([90, 60, 40, 25, 15, 10, 5])
+    side_csc_el = 1 / np.sin(np.radians(el_samples))
     
-    profiles[k][region] = np.interp(h_master, h_interp, d_interp)
-
-for key in ["pressure", "absolute_humidity"]:
-    profiles[key][region] = np.exp(profiles[key].pop(region))
-
     
-# h_from_canonical = np.linspace(region_entry.altitude, h_data.max(), 1024)
-# w_from_canonical = np.interp(h_from_canonical, h_master, profiles["absolute_humidity"][region])
-
-# typical_pwv = np.trapezoid(w_from_canonical, x=h_from_canonical)
-
-if region_entry.max_altitude - region_entry.min_altitude <= 1e3:
-    altitude_samples = [region_entry.min_altitude, region_entry.max_altitude]
-else:
-    altitude_samples = [region_entry.min_altitude, region_entry.altitude, region_entry.max_altitude, ]
+    spec_range_list = [(1e6, 1e7, 1e5),
+                       (1e7, 1e8, 1e6),
+                       (1e8, 1e9, 1e7),
+                       (1e9, 1e12, 1e8),
+                       (1e12, 15e12, 1e10)]
     
-zenith_pwv_samples = [0, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0]
-base_temperature_samples = np.percentile(quantiles["temperature"][..., 0], q=[0, 100])
-elevation_samples = np.linspace(10, 90, 9)
-
-# pwv_scales = zenith_pwv_samples / typical_pwv
-
-# base_pressure_samples = np.percentile(quantiles["temperature"][..., 0], q=[0, 50, 100])
-# elevation_samples = np.linspace(5, 90, 18)
-# elevation_samples = np.linspace(10, 90, 9)
-
-TRJ = np.zeros((
-            len(altitude_samples),
-            len(base_temperature_samples),
-            len(zenith_pwv_samples), 
-            len(elevation_samples),
-            len(nu)))
-TAU = np.zeros(TRJ.shape)
-L = np.zeros(TRJ.shape)
-
-total_spectra = np.prod(TRJ.shape[:-1]) * len(decades)
-i_spectrum = 0
-
-
-region_start = time.monotonic()
-
-for i_alt, alt in enumerate(altitude_samples):
-
-    layer_boundaries = [alt]
-
-    while max(layer_boundaries) < h_master.max():
-
-        layer_res = np.interp(layer_boundaries[-1], 
-                              [alt, h_master.max()], 
-                              [100, 2000])
-
-        layer_boundaries.append(layer_boundaries[-1] + layer_res)
-
-    layer_boundaries = np.array(layer_boundaries)
-    layer_middles = (layer_boundaries[1:] + layer_boundaries[:-1]) / 2
-    layer_abs_hum = np.interp(layer_middles, h_master, profiles["absolute_humidity"][region])
-    typical_pwv_per_layer = np.diff(layer_boundaries) * layer_abs_hum
-
-    layer_tbase = np.interp(layer_boundaries[1:], h_master, profiles["temperature"][region])
-    layer_pbase = np.interp(layer_boundaries[1:], h_master, profiles["pressure"][region])
-    layer_ozone = (28.96 / 48) * np.interp(layer_boundaries[1:], h_master, profiles["ozone"][region])
+    spec_ranges = []
+    nu = np.empty(0)
+    cum_n = 0
+    for i, (nu_min, nu_max, nu_step) in enumerate(spec_range_list):
     
-    for i_bt, bt in enumerate(base_temperature_samples):      
-        for i_pwv, pwv in enumerate(zenith_pwv_samples):
-            for i_el, el in enumerate(elevation_samples):
-
-                layer_tbase = layer_tbase + bt - layer_tbase[0]
-                layer_pwvs = typical_pwv_per_layer * (pwv / typical_pwv_per_layer.sum())
-
-                for i_decade, decade in enumerate(decades):
-
-                    start_index, n = decade["start_index"], decade["n"]
-
-                    config_header = f"""
-    f {decade['f_min']} Hz {decade['f_max']} Hz {decade['f_step']} Hz
-    output f Hz Trj K tau neper L m
-    tol 0
-    za {90 - el} deg
-    T0 0 K
-    """
-                    layer_configs = []
-
-                    for i_layer, hbase in enumerate(layer_boundaries[1:]):
-
-                        layer_configs.append(f"""
-    layer
-    Pbase {layer_pbase[i_layer]:.01f} Pa
-    Tbase {layer_tbase[i_layer]:.01f} K
-    column h2o {1e3 * layer_pwvs[i_layer]:.03f} um_pwv
-    column o3 vmr {layer_ozone[i_layer]:.01e}
-    column dry_air vmr""")
-
-                    config_text = config_header + "\n".join(layer_configs[::-1])
-        
-                    pathlib.Path(f"/tmp/am/{region}").mkdir(parents=True, exist_ok=True)
-                    config_path = f"/tmp/am/{region}/config.amc"
-                    with open(config_path, "w") as f:
-                        f.write(config_text)
-
-                    start_time = time.monotonic()
-                    fails = 0
-
-                    while fails < 7:
-                        try:
-                            proc = subprocess.run([AM_PATH, config_path], capture_output=True, text=True)
-                            spec = pd.DataFrame(np.array(proc.stdout.split()).reshape(-1,4).astype(float), columns=["nu", "trj", "tau", "L"])
-                            # zpwvstr, lospwvstr = re.findall(r"# *\((.+) um_pwv\) *\((.+) um_pwv\) *", proc.stderr)[0]
-                            # zpwv, lospwv = float(zpwvstr), float(lospwvstr)
-
-                            TAU[i_alt, i_bt, i_pwv, i_el, start_index:start_index+n] = spec.tau
-                            TRJ[i_alt, i_bt, i_pwv, i_el, start_index:start_index+n] = spec.trj
-                            L[i_alt, i_bt, i_pwv, i_el, start_index:start_index+n] = spec.L
-
-                            break
-                        except Exception as e:
-                            print(e)
-                            print()
-                            print(proc.stderr)
-                            time.sleep(1e0)
-                            fails += 1
-                    else:
-                        raise ValueError("Too many fails.")
-
-                    i_spectrum += 1
-
-                    mtpl = (time.monotonic() - region_start) / i_spectrum
-
-                    expected_finish_time = region_start + total_spectra * mtpl
-
-                    logger_data = {"region": region,
-                                   "alt": f"{alt} m",
-                                   "base_temp": f"{bt:.1f} K",
-                                   "pwv": f"{pwv:.02f} mm",
-                                   "elev": f"{el} deg",
-                                   "nu": f"{decade['f_min']:.01e}Hz-{decade['f_max']:.01e}Hz",
-                                   "duration": f"{time.monotonic() - start_time:.02f}",
-                                   "etr": f"{expected_finish_time - time.monotonic():.1f} s"}
-                    
-                    logger.info(" | ".join([f"{k}={v}" for k, v in logger_data.items()]) + f" | {i_spectrum} / {total_spectra}")
-
-
-
-spectra_data["side_nu_Hz"] = np.array(nu)
-spectra_data["side_elevation_deg"] = np.array(elevation_samples)
-spectra_data["side_zenith_pwv_mm"] = np.array(zenith_pwv_samples)
-spectra_data["side_base_temperature_K"] = np.array(base_temperature_samples)
-spectra_data["side_altitude_m"] = np.array(altitude_samples)
-spectra_data["rayleigh_jeans_temperature_K"] = TRJ
-spectra_data["opacity_nepers"] = TAU
-spectra_data["excess_path_m"] = L
-
-
-with h5py.File(write_path, "w") as f:
-
-    for key in ["side_nu_Hz", "side_zenith_pwv_mm", "side_base_temperature_K", "side_elevation_deg", "side_altitude_m"]:
-
-        f.create_dataset(key, data=spectra_data[key].astype(float), dtype="f")
-
-    output_config = {
-        "rayleigh_jeans_temperature_K": {"kwargs":{"scaleoffset": 4}},
-        "opacity_nepers": {"kwargs":{"scaleoffset": 4}},
-        "excess_path_m": {"kwargs":{"scaleoffset": 4}},
+        range_nu = np.arange(nu_min, nu_max + 1e0, step=nu_step)
+        spec_ranges.append({"nu_min": Quantity(nu_min, "Hz"), 
+                            "nu_max": Quantity(nu_max, "Hz"), 
+                            "nu_step": Quantity(nu_step, "Hz"), 
+                            "n": len(range_nu),
+                            "nu_slice": slice(cum_n, cum_n + len(range_nu), 1)
+                           })
+        cum_n += len(range_nu)
+        nu = np.r_[nu, range_nu]
+    
+    data_shape = (
+        len(side_pressure_level),
+        len(side_effective_temperature),
+        len(side_pwv),
+        len(side_csc_el),
+        sum([spec_range["n"] for spec_range in spec_ranges]),
+    )
+    
+    print(data_shape)
+    
+    data = {
+        "temperature_rayleigh_jeans": np.zeros(data_shape),
+        "opacity": np.zeros(data_shape),
+        "path_delay": np.zeros(data_shape),
     }
-
-    for key in output_config.keys():
-        f.create_dataset(key, 
-                         data=spectra_data[key],
-                         dtype="f", 
-                         compression="gzip", 
-                         compression_opts=9)
     
+    ### GENERATE THE SPECTRA ###
+    
+    from tqdm import tqdm
+    
+    config_pbar = tqdm(total=np.prod(data_shape[:-1]))
+    
+    for pressure_level_index, pressure_level in enumerate(side_pressure_level):
+        for effective_temperature_index, effective_temperature in enumerate(side_effective_temperature):
+            for pwv_index, pwv in enumerate(side_pwv):
+            
+                w = Weather(region,  
+                            pressure_level=pressure_level,
+                            diurnal=False,
+                            seasonal=False,
+                            override={"pwv": pwv})
+            
+                w.data["levels"]["temperature"] += effective_temperature - w.effective_temperature
+    
+                for csc_el_index, csc_el in enumerate(side_csc_el):
+    
+                    config_pbar.update()
+                
+                    for spec_range_index, spec_range in enumerate(spec_ranges):
+                
+                        config_pbar.set_postfix(region=region,
+                                                pressure_level=w.pressure_level,
+                                                csc_el=csc_el, 
+                                                pwv=pwv,
+                                                effective_temperature=effective_temperature,
+                                                spec_range=(spec_range["nu_min"], spec_range["nu_max"]))
+                
+                        spec = w.compute_am_spectrum(am_path="/home/tm12/am/am-14.0/src/am",
+                                                     nu_min=spec_range["nu_min"], 
+                                                     nu_max=spec_range["nu_max"], 
+                                                     nu_step=spec_range["nu_step"], 
+                                                     el=np.degrees(np.arcsin(1/csc_el)))
+                
+                        total_slice = tuple([pressure_level_index, 
+                                             effective_temperature_index, 
+                                             pwv_index, 
+                                             csc_el_index, 
+                                             spec_range["nu_slice"]])
+                
+                        data["temperature_rayleigh_jeans"][total_slice] = spec["temperature_rayleigh_jeans"].K_RJ
+                        data["opacity"][total_slice] = spec["opacity"]
+                        data["path_delay"][total_slice] = spec["path_delay"].m
+        
+    fields = {
+        "side_pressure_level": {"values": side_pressure_level.hPa, "units": "hPa"},
+        "side_effective_temperature": {"values": side_effective_temperature.K, "units": "K"},
+        "side_pwv": {"values": side_pwv.mm, "units": "mm"},
+        "side_csc_el": {"values": side_csc_el, "units": ""},
+        "side_nu": {"values": nu, "units": "Hz"},
+        "temperature_rayleigh_jeans": {"values": data["temperature_rayleigh_jeans"], "units": "K_RJ"},
+        "opacity": {"values": data["opacity"], "units": ""},
+        "path_delay": {"values": data["path_delay"], "units": "m"},
+    }
+    
+    with h5py.File(region_write_path, "w") as f:
+        for field in fields:
+            f.create_dataset(field, data=fields[field]["values"], dtype=np.float32, compression="gzip")
+            f[field].attrs["units"] = fields[field]["units"]
+    
+
+
